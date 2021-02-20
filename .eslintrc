@@ -1,0 +1,53 @@
+{
+  "extends": [
+    "airbnb-typescript/base",
+    "plugin:@typescript-eslint/recommended",
+    "plugin:prettier/recommended",
+    "prettier",
+    "prettier/@typescript-eslint",
+    "plugin:import/typescript"
+  ],
+  "plugins": [
+    "@typescript-eslint",
+    "import",
+    "prettier"
+  ],
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "project": "./tsconfig.eslint.json"
+  },
+  "rules": {
+    "@typescript-eslint/ban-types": ["off"],
+    "@typescript-eslint/no-explicit-any": ["off"],
+    "@typescript-eslint/no-unused-vars": ["error", {
+      "argsIgnorePattern": "^_",
+      "ignoreRestSiblings": true
+    }],
+    "class-methods-use-this": ["off"],
+    "no-plusplus": ["error", {
+      "allowForLoopAfterthoughts": true
+    }],
+    "no-underscore-dangle": ["error", {
+      "allowAfterThis": true
+    }],
+    "no-restricted-syntax": ["off"],
+    "no-cond-assign": ["error", "except-parens"]
+  },
+  "env": {
+    "browser": true
+  },
+  "settings": {
+    "import/resolver": {
+      "alias": {
+        "map": [
+          ["src", "./src"]
+        ],
+        "extensions": [".js", ".ts", ".json", ".mjs"]
+      },
+      "node": {
+        "extensions": [".js", ".ts", ".json", ".mjs"]
+      }
+    },
+    "import/extensions": [".js", ".ts", ".json", ".mjs"]
+  }
+}
