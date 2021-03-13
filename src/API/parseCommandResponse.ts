@@ -1,6 +1,6 @@
 import { load } from 'cheerio';
 import { HTMLMismatchError } from 'src/utils/errors';
-import { Cheerio, Root } from 'src/utils/constants';
+import { Cheerio, Root } from 'src/types';
 
 export enum Status {
   Ok = 'ok',

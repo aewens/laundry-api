@@ -1,18 +1,9 @@
 import { load } from 'cheerio';
-import { Timeslot } from 'src/types';
+import { Root, Timerange, Timeslot } from 'src/types';
 import weekFromDate from 'src/utils/weekFromDate';
 import dateFromWeek from 'src/utils/dateFromWeek';
-import { RawStatus, Root, statusMap } from 'src/utils/constants';
+import { RawStatus, statusMap } from 'src/utils/constants';
 import { HTMLMismatchError } from 'src/utils/errors';
-
-interface Time {
-  hour: number;
-  minute: number;
-}
-interface Timerange {
-  start: Time;
-  end: Time;
-}
 
 function circularMod(q: number, p: number) {
   if (q < 0) {

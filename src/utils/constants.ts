@@ -1,9 +1,5 @@
 /* eslint-disable no-console */
 import 'src/../loadenv';
-import { load } from 'cheerio';
-
-export type Root = typeof load extends (attr: never) => infer T ? T : never;
-export type Cheerio = Root extends (...args: never[]) => infer T ? T : never;
 
 export enum Status {
   Own = 'own',

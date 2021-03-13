@@ -4,15 +4,17 @@ import {
   HOMEPAGE_PATH,
   USERNAME,
 } from 'src/utils/constants';
-import parseBookingResponse from 'src/utils/parseCommandResponse';
-import AuthSession from 'src/AuthSession';
 import { Timeslot } from 'src/types';
 import padInt from 'src/utils/padInt';
+import AuthSession from './AuthSession';
+import parseWeek from './parseWeek';
+import parseCommandResponse from './parseCommandResponse';
+import parseBookedTimes from './parseBookedTimes';
 
 class ApiModel {
   private session: AuthSession;
 
-  async fetchWeek(weekOffset = 0) {
+  async fetchWeek(weekOffset = 0): Promise<Timeslot[]> {
     const url = new URL(`https://${HOMEPAGE_HOST}${HOMEPAGE_PATH}`);
     if (!Number.isInteger(weekOffset)) {
       throw new TypeError('weekOffset must be an integer');
@@ -34,15 +36,23 @@ class ApiModel {
       // eslint-disable-next-line no-console
       console.error(err);
     }
-    return res.data;
+    return parseWeek(res.data);
   }
 
-  async fetchTestWeek(weekOffset = 0) {
+  async fetchTestWeek(weekOffset = 0): Promise<Timeslot[]> {
     const { readFile: readFileCb } = await import('fs');
     const { promisify } = await import('util');
     const readFile = promisify(readFileCb);
     const buf = await readFile(`tests/week${weekOffset}.html`);
-    return buf;
+    return parseWeek(buf);
+  }
+
+  async fetchTestBookedTimes(type = 'SingleEntry'): Promise<Timeslot[]> {
+    const { readFile: readFileCb } = await import('fs');
+    const { promisify } = await import('util');
+    const readFile = promisify(readFileCb);
+    const buf = await readFile(`tests/booking/listBookings${type}.html`);
+    return parseBookedTimes(buf);
   }
 
   async command(
@@ -65,27 +75,25 @@ class ApiModel {
       }
       url.searchParams.set(key, parsedVal);
     }
-    return this.session.doApiRequest(url, {
+    const res = await this.session.doApiRequest(url, {
       includeSessionSearchParams: true,
     });
+    if (res.data == null) {
+      throw new Error('Got no data from command');
+    }
+    return parseCommandResponse(res.data);
   }
 
-  async book({ groupId, start, passNumber }: Timeslot) {
+  book({ groupId, start, passNumber }: Timeslot) {
     const date = `${padInt(start.getUTCFullYear())}-${padInt(
       start.getUTCMonth() + 1,
       2,
     )}-${padInt(start.getUTCDate())} 00:00:00`;
-    const buf = (
-      await this.command('book', {
-        groupId,
-        date,
-        passNumber,
-      })
-    ).data;
-    if (buf == null) {
-      throw new Error('Got no data from command');
-    }
-    return parseBookingResponse(buf);
+    return this.command('book', {
+      groupId,
+      date,
+      passNumber,
+    });
   }
 
   async testBook(_input: unknown, filename = 'successBooking') {
@@ -93,7 +101,7 @@ class ApiModel {
     const { promisify } = await import('util');
     const readFile = promisify(readFileCb);
     const buf = await readFile(`tests/booking/${filename}.html`);
-    return parseBookingResponse(buf);
+    return parseCommandResponse(buf);
   }
 
   constructor() {
