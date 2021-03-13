@@ -1,12 +1,12 @@
 import { CookieJar } from 'cookiejar';
 import { RequestOptions } from 'https';
-import { request, RequestResponse } from './utils/request';
+import { request, RequestResponse } from 'src/utils/request';
 import {
   AUTH_URL,
   HOMEPAGE_HOST,
   HOMEPAGE_PATH,
   MAX_REDIRECTS,
-} from './utils/constants';
+} from 'src/utils/constants';
 
 // 5 minutes
 const MIN_AUTH_LENGTH = 1000 * 60 * 5;
@@ -96,6 +96,7 @@ export default class AuthSession {
     } = fullOptions;
     let url = reqUrl instanceof URL ? reqUrl : new URL(reqUrl);
     attachAuthParams(url, authState, includeSessionSearchParams);
+    console.log(url);
     let res: RequestResponse;
     let redirects = 0;
     // eslint-disable-next-line no-constant-condition
@@ -108,7 +109,7 @@ export default class AuthSession {
         }
         const newUrl = new URL(res.headers.location, url);
         if (/error\.aspx$/i.test(newUrl.pathname)) {
-          if (authState.authTime + MIN_AUTH_LENGTH < Date.now()) {
+          if (authState.authTime + MIN_AUTH_LENGTH > Date.now()) {
             throw new Error('Server responded with an error');
           } else {
             // eslint-disable-next-line no-await-in-loop
