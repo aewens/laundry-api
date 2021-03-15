@@ -1,13 +1,11 @@
-#import { CookieJar } from 'cookiejar';
-#import { RequestOptions } from 'https';
-#import {
-#  AUTH_URL,
-#  HOMEPAGE_HOST,
-#  HOMEPAGE_PATH,
-#  MAX_REDIRECTS,
-#} from 'src/utils/constants';
-#import { request, RequestResponse } from './request';
 from aiohttp import ClientSession, CookieJar
+
+from utils.constants import (
+  AUTH_URL,
+  HOMEPAGE_HOST,
+  HOMEPAGE_PATH,
+  MAX_REDIRECTS
+)
 
 from collections import namedtuple
 from asyncio import get_event_loop
@@ -15,14 +13,13 @@ from time import time
 from urllib.parse import urljoin
 from re import compile as regex
 
-# 5 minutes
-MIN_AUTH_LENGTH = 1000 * 60 * 5
+MINUTE = 60
+HOUR = 60 * MINUTE
+MIN_AUTH_LENGTH = 5 * MINUTE
+MAX_AUTH_LENGTH = 1 * HOUR
 
-# 1 hour
-MAX_AUTH_LENGTH = 1000 * 60 * 60
-
-def extract_and_mutate_search_params(attr, params):
-    ret = {}
+def extract_and_mutate_params(attr, params):
+    ret = dict()
     for key in attr:
         params_key = params.get(key)
         if params_key is not None:
@@ -58,12 +55,21 @@ def attach_auth_params(auth_state, include_session_params=False):
     return params
 
 class AuthSession:
-    def __init__(self, username):
+    def __init__(self, username, loop=None):
         self.username = username
         self._session = ClientSession(cookie_jar=CookieJar())
 
         self._auth_state = None
         self._auth_refresh_promise = None
+
+        self._loop = loop
+        if self._loop is None:
+            # If no event loop was given, create one and start it
+            self._loop = get_event_loop()
+            self._loop.run_forever()
+
+    async def spawn(self, fn):
+        return self._loop.create_task(fn())
 
     async def do_api_request(
         self,
@@ -79,6 +85,7 @@ class AuthSession:
 
         params = attach_auth_params(req_url, auth_state, include_session_params)
         kwargs["params"] = params
+        kwargs["allow_redirects"] = follow_redirects
 
         url = req_url
 
@@ -86,7 +93,7 @@ class AuthSession:
         redirects = 0
         while True:
             async with self._session as sess:
-                async with sess.get(url, follow_redirects, **kwargs) as res:
+                async with sess.get(url, **kwargs) as res:
                     if res.status not in [301, 302]:
                         break
 
@@ -95,83 +102,81 @@ class AuthSession:
                         Invalid redirect, location header not provided.
                         """.strip())
 
-                    new_url = urljoin(url, r.headers.get("location"))
-                    pattern = regex(r"error\.aspx$")
-                    if pattern.search(new_url) is not None:
-                        if auth_time + MIN_AUTH_LENGTH > time():
-                            raise Exception("Server responded with an error")
+            new_url = urljoin(url, res.headers.get("location"))
+            pattern = regex(r"error\.aspx$")
+            if pattern.search(new_url) is not None:
+                if auth_time + MIN_AUTH_LENGTH > time():
+                    raise Exception("Server responded with an error")
 
-                        args = follow_redirect, include_session_params
-                        await self.refresh_auth()
-                        return self.do_api_request(req_url, *args, **kwargs)
+                await self.refresh_auth()
 
-                    if not follow_redirects:
-                        break
+                args = follow_redirects, include_session_params
+                res = await self.do_api_request(req_url, *args, **kwargs)
+                return res
 
-                    url = new_url
-                    params = attach_auth_params(url, auth_state,
-                        include_session_params)
-                    kwargs["params"] = params
+            if not follow_redirects:
+                break
 
-                    if redirects >= MAX_REDIRECTS:
+            url = new_url
+            params = attach_auth_params(url, auth_state,
+                include_session_params)
+            kwargs["params"] = params
+
+            if redirects >= MAX_REDIRECTS:
+                raise Exception(f"""
+                Request failed, too many redirects: {req_url}
+                """.strip())
+
+            redirects = redirects + 1
+
+        return res
+
+    async def _do_refresh_auth(self):
+        params = dict()
+        params["username"] = self.username
+
+        kwargs = dict()
+        kwargs["params"] = params
+        kwargs["allow_redirects"] = True
+
+        url = AUTH_URL
+
+        res = None
+        redirects = None
+        while True:
+            async with self._session as sess:
+                async with sess.get(url, **kwargs) as res:
+                    location = res.headers.get("location")
+                    if res.status != 302 or location is None:
                         raise Exception(f"""
-                        Request failed, too many redirects: {req_url}
+                        Authentication failed, loop when to non-redirect
                         """.strip())
 
-                    redirects = redirects + 1
+            url = urljoin(url, location)
+            if url == f"{HOMEPAGE_HOST}/{HOMEPAGE_PATH}":
+                break
 
-    return res
+            if redirects >= MAX_REDIRECTS:
+                raise Exception("Maximum redirects reached")
 
-"""
-  private async doRefreshAuth(): Promise<AuthState> {
-    let url: URL = new URL(AUTH_URL);
-    url.searchParams.set('username', this.username);
-    let res: RequestResponse;
-    let redirects = 0;
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      // eslint-disable-next-line no-await-in-loop
-      res = await request(url, undefined, this.cookieJar);
-      if (res.statusCode === 302 && res.headers.location != null) {
-        url = new URL(res.headers.location, url);
-        if (url.host === HOMEPAGE_HOST && url.pathname === HOMEPAGE_PATH) {
-          break;
-        }
-      } else {
-        throw new Error('Authentication failed, loop went to non-redirect');
-      }
-      if (redirects >= MAX_REDIRECTS) {
-        throw new Error('Maximum Redirects reached');
-      }
-      redirects += 1;
-    }
-    const { searchParams } = url;
-    const { weekOffset } = extractAndMutateSearchParams(
-      ['weekOffset'],
-      searchParams,
-    );
-    const weekOffsetNum = (() => {
-      if (!weekOffset) return 0;
-      return Number.parseInt(weekOffset, 10);
-    })();
-    if (Number.isNaN(weekOffsetNum)) {
-      throw new Error('WeekOffset resolved to NaN');
-    }
-    this.authState = {
-      weekOffset: weekOffsetNum,
-      searchParams,
-      authTime: Date.now(),
-    };
-    return this.authState;
-  }
+            redirects = redirects + 1
 
-  private refreshAuth(): Promise<AuthState> {
-    if (this.authRefreshPromise == null) {
-      this.authRefreshPromise = this.doRefreshAuth().finally(() => {
-        this.authRefreshPromise = null;
-      });
-    }
-    return this.authRefreshPromise;
-  }
-}
-"""
+        mutate = extract_and_mutate_params(["weekOffset"], params)
+        week_offset = mutate.get("weekOffset")
+        if week_offset is None or not week_offset.isnumeric():
+            raise Exception("weekOffset did not resolve to numeric")
+
+        self._auth_state = AuthState(int(week_offset), params, time())
+
+        return self._auth_state
+
+
+    async def _reset_promise(self):
+        self._auth_refresh_promise = None
+
+    async def _refresh_auth(self):
+        if self._auth_refresh_promise is None:
+            self._auth_refresh_promise = self.spawn(self._do_refresh_auth())
+            self._auth_refresh_promise.add_done_callback(self._reset_promise)
+
+        return self._auth_refresh_promise
