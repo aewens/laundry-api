@@ -1,6 +1,11 @@
+from dotenv import load_dotenv
+
 from typing import NamedTuple
-from os import getenv, exit
-from sys import stderr
+from os import getenv
+from sys import stderr, exit
+
+# Loads .env
+load_dotenv()
 
 class Status(NamedTuple):
     Own = "own"
@@ -17,16 +22,16 @@ StatusMap = {
     "images/icon_no.png": Status.Taken,
 }
 
-raw_max_redirects = getenv("MAX_REDIRECTS")
+raw_max_redirects = getenv("MAX_REDIRECTS", "5")
 max_redirects_num = raw_max_redirects.isnumeric()
-MAX_REDIRECTS = abs(int(raw_max_redirects)) if max_redirects_numeric() else 5
+MAX_REDIRECTS = abs(int(raw_max_redirects)) if max_redirects_num else 5
 AUTH_URL = getenv("AUTH_URL")
 HOMEPAGE_HOST = getenv("HOMEPAGE_HOST")
 HOMEPAGE_PATH = getenv("HOMEPAGE_PATH")
 COMMAND_PATH = getenv("COMMAND_PATH")
 USERNAME = getenv("USERNAME")
 
-env_varss = [
+env_vars = [
     AUTH_URL,
     HOMEPAGE_HOST,
     HOMEPAGE_PATH,
