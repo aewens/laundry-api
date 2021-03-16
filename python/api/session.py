@@ -8,7 +8,7 @@ from utils.constants import (
 )
 
 from collections import namedtuple
-from asyncio import get_event_loop
+from asyncio import get_event_loop, Future
 from time import time
 from urllib.parse import urljoin, urlsplit, parse_qs
 from re import compile as regex
@@ -58,7 +58,7 @@ class AuthSession:
         self.username = username
         self._session = ClientSession(cookie_jar=CookieJar())
 
-        self._auth_state = AuthState(0, dict(), time())
+        self._auth_state = AuthState(0, dict(), 0)
         self._auth_refresh_promise = None
 
         self._loop = loop
@@ -66,10 +66,6 @@ class AuthSession:
             # If no event loop was given, create one and start it
             self._loop = get_event_loop()
             self._loop.run_forever()
-
-    async def spawn(self, fn):
-        task = self._loop.create_task(fn())
-        return task
 
     async def do_api_request(
         self,
@@ -86,7 +82,7 @@ class AuthSession:
             auth_state = await self._refresh_auth()
 
         params = attach_auth_params(req_url, auth_state, include_session_params)
-        kwargs["params"] = params
+        kwargs["params"] = params.items()
         kwargs["allow_redirects"] = follow_redirects
 
         url = req_url
@@ -122,7 +118,7 @@ class AuthSession:
             url = new_url
             params = attach_auth_params(url, auth_state,
                 include_session_params)
-            kwargs["params"] = params
+            kwargs["params"] = params.items()
 
             if redirects >= MAX_REDIRECTS:
                 raise Exception(f"""
@@ -133,7 +129,7 @@ class AuthSession:
 
         return res
 
-    async def _do_refresh_auth(self):
+    async def _refresh_auth(self):
         params = dict()
         params["username"] = self.username
 
@@ -169,16 +165,4 @@ class AuthSession:
             raise Exception("weekOffset did not resolve to numeric")
 
         self._auth_state = AuthState(int(week_offset), params, time())
-
         return self._auth_state
-
-
-    async def _reset_promise(self):
-        self._auth_refresh_promise = None
-
-    async def _refresh_auth(self):
-        if self._auth_refresh_promise is None:
-            self._auth_refresh_promise = self.spawn(self._do_refresh_auth())
-            self._auth_refresh_promise.add_done_callback(self._reset_promise)
-
-        return self._auth_refresh_promise
