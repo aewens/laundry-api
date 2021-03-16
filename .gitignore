@@ -5,6 +5,8 @@
 
 /tests
 
+__pycache__/
+
 # misc
 .DS_Store
 .env.local

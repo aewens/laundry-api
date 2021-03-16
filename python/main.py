@@ -8,6 +8,7 @@ from utils.constants import (
 from asyncio import get_event_loop
 
 def completed(future):
+    future.get_loop().create_task(auth_sess.close())
     print("COMPLETED", future.result())
 
 loop = get_event_loop()

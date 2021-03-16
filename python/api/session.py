@@ -34,6 +34,9 @@ AuthState = namedtuple("AuthState", [
     "auth_time"
 ])
 
+def simplify_qs(qs):
+    return {k: v[-1] for k, v in qs.items()}
+
 def attach_auth_params(url, auth_state, include_session_params=False):
     params = dict()
 
@@ -56,7 +59,7 @@ def attach_auth_params(url, auth_state, include_session_params=False):
 class AuthSession:
     def __init__(self, username, loop=None):
         self.username = username
-        self._session = ClientSession(cookie_jar=CookieJar())
+        self._session = ClientSession(cookie_jar=CookieJar(), requote_redirect_url = False)
 
         self._auth_state = AuthState(dict(), 0)
         self._auth_refresh_promise = None
@@ -66,6 +69,10 @@ class AuthSession:
             # If no event loop was given, create one and start it
             self._loop = get_event_loop()
             self._loop.run_forever()
+
+    def spawn(self, fn):
+        task = self._loop.create_task(fn())
+        return task
 
     async def do_api_request(
         self,
@@ -82,23 +89,21 @@ class AuthSession:
             auth_state = await self._refresh_auth()
 
         params = attach_auth_params(req_url, auth_state, include_session_params)
-        kwargs["params"] = params.items()
+        kwargs["params"] = params
         kwargs["allow_redirects"] = follow_redirects
 
         url = req_url
-
         res = None
         redirects = 0
         while True:
-            async with self._session as sess:
-                async with sess.get(url, **kwargs) as res:
-                    if res.status not in [301, 302]:
-                        break
+            async with self._session.get(url, **kwargs) as res:
+                if res.status not in [301, 302]:
+                    break
 
-                    if res.headers.get("location") is None:
-                        raise Exception("""
-                        Invalid redirect, location header not provided.
-                        """.strip())
+                if res.headers.get("location") is None:
+                    raise Exception("""
+                    Invalid redirect, location header not provided.
+                    """.strip())
 
             new_url = urljoin(url, res.headers.get("location"))
             pattern = regex(r"Error\.aspx(?:$|\?|#)")
@@ -129,33 +134,34 @@ class AuthSession:
 
         return res
 
-    async def _do_refresh_auth(self):
-        if (self._auth_state is not None and
-            self._auth_state.auth_time + MAX_AUTH_LENGTH >= time()):
-             return self._auth_state
+    async def close(self):
+        if not self._session.closed:
+            await self._session.close()
 
+    async def _do_refresh_auth(self):
         params = dict()
         params["username"] = self.username
 
         kwargs = dict()
         kwargs["params"] = params
-        kwargs["allow_redirects"] = True
+        kwargs["allow_redirects"] = False
 
         url = AUTH_URL
 
         res = None
-        redirects = None
+        redirects = 0
         while True:
-            async with self._session as sess:
-                async with sess.get(url, **kwargs) as res:
-                    location = res.headers.get("location")
-                    if res.status != 302 or location is None:
-                        raise Exception(f"""
-                        Authentication failed, loop when to non-redirect
-                        """.strip())
+            async with self._session.get(url, **kwargs) as res:
+                if "params" in kwargs: del kwargs["params"]
+                location = res.headers.get("location")
+                if res.status != 302 or location is None:
+                    raise Exception(f"""
+                    Authentication failed, loop when to non-redirect
+                    """.strip())
 
             url = urljoin(url, location)
-            if url == f"{HOMEPAGE_HOST}/{HOMEPAGE_PATH}":
+            parsed_url = urlsplit(url)
+            if parsed_url.netloc == HOMEPAGE_HOST and parsed_url.path == HOMEPAGE_PATH:
                 break
 
             if redirects >= MAX_REDIRECTS:
@@ -163,15 +169,16 @@ class AuthSession:
 
             redirects = redirects + 1
 
+        params = simplify_qs(parse_qs(urlsplit(url).query))
         mutate = extract_and_mutate_params(["weekOffset"], params)
         week_offset = mutate.get("weekOffset")
         if week_offset is None or not week_offset.isnumeric():
             raise Exception("weekOffset did not resolve to numeric")
 
-        self._auth_state = AuthState(int(week_offset), params, time())
+        self._auth_state = AuthState(params, time())
         return self._auth_state
 
-    def _refresh_auth(self, future):
+    def _reset_promise(self, future):
         self._auth_refresh_promise = None
 
     def _handle_future(self, future):
@@ -182,7 +189,7 @@ class AuthSession:
         else:
             self._auth_refresh_promise.set_exception(exception)
 
-    async def _reset_promise(self):
+    async def _refresh_auth(self):
         if self._auth_refresh_promise is None:
             future = self._loop.create_future()
             self._auth_refresh_promise = future
