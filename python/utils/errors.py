@@ -1,0 +1,2 @@
+class HTMLMismatchError(Exception):
+    pass
