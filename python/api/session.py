@@ -8,7 +8,7 @@ from utils.constants import (
 )
 
 from collections import namedtuple
-from asyncio import get_event_loop, Future
+from asyncio import get_event_loop, Future, Task
 from time import time
 from urllib.parse import urljoin, urlsplit, parse_qs
 from re import compile as regex
@@ -59,6 +59,7 @@ class AuthSession:
         self._session = ClientSession(cookie_jar=CookieJar())
 
         self._auth_state = AuthState(dict(), 0)
+        self._auth_refresh_promise = None
 
         self._loop = loop
         if self._loop is None:
@@ -128,7 +129,7 @@ class AuthSession:
 
         return res
 
-    async def _refresh_auth(self):
+    async def _do_refresh_auth(self):
         if (self._auth_state is not None and
             self._auth_state.auth_time + MAX_AUTH_LENGTH >= time()):
              return self._auth_state
@@ -169,3 +170,24 @@ class AuthSession:
 
         self._auth_state = AuthState(int(week_offset), params, time())
         return self._auth_state
+
+    def _refresh_auth(self, future):
+        self._auth_refresh_promise = None
+
+    def _handle_future(self, future):
+        exception = future.exception()
+        if exception is None:
+            self._auth_refresh_promise.set_result(future.result())
+
+        else:
+            self._auth_refresh_promise.set_exception(exception)
+
+    async def _reset_promise(self):
+        if self._auth_refresh_promise is None:
+            future = self._loop.create_future()
+            self._auth_refresh_promise = future
+            future.add_done_callback(self._reset_promise)
+            task = self._loop.create_task(self._do_refresh_auth())
+            task.add_done_callback(self._handle_future)
+
+        return await self._auth_refresh_promise
