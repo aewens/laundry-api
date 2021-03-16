@@ -1,5 +1,4 @@
 from aiohttp import ClientSession, CookieJar
-
 from utils.constants import (
   AUTH_URL,
   HOMEPAGE_HOST,
@@ -34,6 +33,9 @@ AuthState = namedtuple("AuthState", [
     "auth_time"
 ])
 
+def simplify_qs(qs):
+    return {k: v[-1] for k, v in qs.items()}
+
 def attach_auth_params(url, auth_state, include_session_params=False):
     params = dict()
 
@@ -56,15 +58,20 @@ def attach_auth_params(url, auth_state, include_session_params=False):
 class AuthSession:
     def __init__(self, username, loop=None):
         self.username = username
-        self._session = ClientSession(cookie_jar=CookieJar())
+        self._session = ClientSession(cookie_jar=CookieJar(), requote_redirect_url = False)
 
         self._auth_state = AuthState(dict(), 0)
+        self._auth_refresh_promise = None
 
         self._loop = loop
         if self._loop is None:
             # If no event loop was given, create one and start it
             self._loop = get_event_loop()
             self._loop.run_forever()
+
+    def spawn(self, fn):
+        task = self._loop.create_task(fn())
+        return task
 
     async def do_api_request(
         self,
@@ -81,11 +88,10 @@ class AuthSession:
             auth_state = await self._refresh_auth()
 
         params = attach_auth_params(req_url, auth_state, include_session_params)
-        kwargs["params"] = params.items()
+        kwargs["params"] = params
         kwargs["allow_redirects"] = follow_redirects
 
         url = req_url
-
         res = None
         redirects = 0
         while True:
@@ -128,7 +134,7 @@ class AuthSession:
 
         return res
 
-    async def _refresh_auth(self):
+    async def _do_refresh_auth(self):
         if (self._auth_state is not None and
             self._auth_state.auth_time + MAX_AUTH_LENGTH >= time()):
              return self._auth_state
@@ -138,34 +144,51 @@ class AuthSession:
 
         kwargs = dict()
         kwargs["params"] = params
-        kwargs["allow_redirects"] = True
+        kwargs["allow_redirects"] = False
 
         url = AUTH_URL
 
         res = None
-        redirects = None
+        redirects = 0
         while True:
-            async with self._session as sess:
-                async with sess.get(url, **kwargs) as res:
-                    location = res.headers.get("location")
-                    if res.status != 302 or location is None:
-                        raise Exception(f"""
-                        Authentication failed, loop when to non-redirect
-                        """.strip())
+            async with self._session.get(url, **kwargs) as res:
+                if "params" in kwargs: del kwargs["params"]
+                location = res.headers.get("location")
+                if res.status != 302 or location is None:
+                    raise Exception(f"""
+                    Authentication failed, loop when to non-redirect
+                    """.strip())
 
             url = urljoin(url, location)
-            if url == f"{HOMEPAGE_HOST}/{HOMEPAGE_PATH}":
+            parsed_url = urlsplit(url)
+            url_host = parsed_url.netloc
+            url_path = parsed_url.path
+            if url_host == HOMEPAGE_HOST and url_path == HOMEPAGE_PATH:
                 break
 
             if redirects >= MAX_REDIRECTS:
                 raise Exception("Maximum redirects reached")
 
             redirects = redirects + 1
-
+        
+        params = simplify_qs(parse_qs(urlsplit(url).query))
         mutate = extract_and_mutate_params(["weekOffset"], params)
         week_offset = mutate.get("weekOffset")
         if week_offset is None or not week_offset.isnumeric():
             raise Exception("weekOffset did not resolve to numeric")
 
-        self._auth_state = AuthState(int(week_offset), params, time())
+        self._auth_state = AuthState(params, time())
         return self._auth_state
+
+    def _reset_promise(self):
+        self._auth_refresh_promise = None
+
+    async def _refresh_auth(self):
+        if self._auth_refresh_promise is None:
+            promise = self._loop.create_future()
+            self._auth_refresh_promise = promise
+            promise.add_done_callback(lambda x: self._reset_promise())
+            task = self.spawn(self._do_refresh_auth)
+            task.add_done_callback(lambda x: promise.set_result(x.result()) if x.exception() is None else promise.set_exception(x.exception()))
+
+        return await self._auth_refresh_promise
