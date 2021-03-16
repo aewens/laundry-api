@@ -129,6 +129,10 @@ class AuthSession:
         return res
 
     async def _refresh_auth(self):
+        if (self._auth_state is not None and
+            self._auth_state.auth_time + MAX_AUTH_LENGTH >= time()):
+             return self._auth_state
+
         params = dict()
         params["username"] = self.username
 
