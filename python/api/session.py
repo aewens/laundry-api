@@ -12,6 +12,7 @@ from asyncio import get_event_loop, Future
 from time import time
 from urllib.parse import urljoin, urlsplit, parse_qs
 from re import compile as regex
+from copy import deepcopy
 
 MINUTE = 60
 HOUR = 60 * MINUTE
@@ -29,7 +30,6 @@ def extract_and_mutate_params(attr, params):
     return ret
 
 AuthState = namedtuple("AuthState", [
-    "week_offset",
     "params",
     "auth_time"
 ])
@@ -37,7 +37,7 @@ AuthState = namedtuple("AuthState", [
 def attach_auth_params(url, auth_state, include_session_params=False):
     params = dict()
 
-    auth_params = auth_state.params
+    auth_params = deepcopy(auth_state.params)
     for key in parse_qs(urlsplit(url).query).keys():
         if key in auth_params:
             del auth_params[key]
@@ -58,8 +58,7 @@ class AuthSession:
         self.username = username
         self._session = ClientSession(cookie_jar=CookieJar())
 
-        self._auth_state = AuthState(0, dict(), 0)
-        self._auth_refresh_promise = None
+        self._auth_state = AuthState(dict(), 0)
 
         self._loop = loop
         if self._loop is None:
@@ -101,7 +100,7 @@ class AuthSession:
                         """.strip())
 
             new_url = urljoin(url, res.headers.get("location"))
-            pattern = regex(r"error\.aspx$")
+            pattern = regex(r"Error\.aspx(?:$|\?|#)")
             if pattern.search(new_url) is not None:
                 if auth_time + MIN_AUTH_LENGTH > time():
                     raise Exception("Server responded with an error")
