@@ -10,7 +10,7 @@ from utils.constants import (
 from collections import namedtuple
 from asyncio import get_event_loop
 from time import time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, parse_qs
 from re import compile as regex
 
 MINUTE = 60
@@ -34,12 +34,11 @@ AuthState = namedtuple("AuthState", [
     "auth_time"
 ])
 
-def attach_auth_params(auth_state, include_session_params=False):
+def attach_auth_params(url, auth_state, include_session_params=False):
     params = dict()
 
-    # TODO - Patch this to work with back-end web framework being used
     auth_params = auth_state.params
-    for key in url.params.keys():
+    for key in parse_qs(urlsplit(url).query).keys():
         if key in auth_params:
             del auth_params[key]
 
@@ -59,7 +58,7 @@ class AuthSession:
         self.username = username
         self._session = ClientSession(cookie_jar=CookieJar())
 
-        self._auth_state = None
+        self._auth_state = AuthState(0, dict(), time())
         self._auth_refresh_promise = None
 
         self._loop = loop
@@ -69,7 +68,8 @@ class AuthSession:
             self._loop.run_forever()
 
     async def spawn(self, fn):
-        return self._loop.create_task(fn())
+        task = self._loop.create_task(fn())
+        return task
 
     async def do_api_request(
         self,
@@ -79,9 +79,11 @@ class AuthSession:
         **kwargs
     ):
         auth_state = self._auth_state
-        auth_time = self._auth_state.auth_time
+        if auth_state is not None:
+            auth_time = self._auth_state.auth_time
+
         if auth_state is None or auth_time + MAX_AUTH_LENGTH < time():
-            auth_state = await self.refresh_auth()
+            auth_state = await self._refresh_auth()
 
         params = attach_auth_params(req_url, auth_state, include_session_params)
         kwargs["params"] = params
@@ -108,7 +110,7 @@ class AuthSession:
                 if auth_time + MIN_AUTH_LENGTH > time():
                     raise Exception("Server responded with an error")
 
-                await self.refresh_auth()
+                await self._refresh_auth()
 
                 args = follow_redirects, include_session_params
                 res = await self.do_api_request(req_url, *args, **kwargs)
